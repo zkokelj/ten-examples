@@ -353,9 +353,6 @@ if __name__ == "__main__":
         chain_id
     )
     
-    if tx_hash:
-        print(f"Transaction hash: {tx_hash}")
-    
     time.sleep(3)
     tx_count = getTransactionCount(base_url, account.address, token)
     # Get session key balance after transaction
