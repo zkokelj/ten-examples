@@ -4,6 +4,7 @@ import requests
 from web3 import Web3
 import logging
 from dotenv import load_dotenv
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -235,6 +236,65 @@ def getBalance(url, address, token, block_parameter="latest"):
     
     return result
 
+def sendTransaction(url, from_address, to_address, value_wei, private_key, token, chain_id):
+    """Send a transaction from one address to another."""
+    logging.info(f'📤 Sending transaction from {from_address} to {to_address}')
+    
+    # Get transaction count for nonce
+    nonce_response = requests.post(f"{url}/v1/?token={token}", 
+        data=json.dumps({
+            "jsonrpc": "2.0",
+            "method": "eth_getTransactionCount",
+            "params": [from_address, "latest"],
+            "id": 1
+        }),
+        headers={"Content-Type": "application/json"}
+    )
+    
+    if nonce_response.status_code != 200:
+        logging.error(f'❌ Failed to get nonce: {nonce_response.status_code}')
+        return None
+    
+    nonce_data = nonce_response.json()
+    nonce = int(nonce_data['result'], 16) if 'result' in nonce_data else 0
+    
+    # Create transaction
+    transaction = {
+        'to': Web3.to_checksum_address(to_address),
+        'value': hex(value_wei),
+        'gas': hex(25000),  # Increased gas limit for Ten network
+        'gasPrice': hex(20000000000),  # 20 gwei
+        'nonce': hex(nonce),
+        'chainId': hex(chain_id)
+    }
+    
+    # Sign transaction
+    w3 = Web3()
+    signed_txn = w3.eth.account.sign_transaction(transaction, private_key)
+    
+    # Send raw transaction
+    response = requests.post(f"{url}/v1/?token={token}",
+        data=json.dumps({
+            "jsonrpc": "2.0",
+            "method": "eth_sendRawTransaction",
+            "params": [signed_txn.rawTransaction.hex()],
+            "id": 1
+        }),
+        headers={"Content-Type": "application/json"}
+    )
+    
+    if response.status_code != 200:
+        logging.error(f'❌ Failed to send transaction: {response.status_code}')
+        return None
+    
+    result = response.json()
+    if 'result' in result:
+        tx_hash = result['result']
+        logging.info(f'📤 Transaction sent: {tx_hash}')
+        return tx_hash
+    
+    return result
+
 # Example usage:
 if __name__ == "__main__":
     base_url = "https://testnet-rpc.ten.xyz"
@@ -278,5 +338,27 @@ if __name__ == "__main__":
     
     # Get balance after faucet
     balance_after = getBalance(base_url, account.address, token)
+    
+    # Get session key balance before transaction
+    session_balance_before = getBalance(base_url, session_key, token)
+    
+    # Send transaction from account to session key (0.1 ETH)
+    tx_hash = sendTransaction(
+        base_url, 
+        account.address, 
+        session_key, 
+        50000000000000000,  # 0.05 ETH in wei
+        account._private_key, 
+        token, 
+        chain_id
+    )
+    
+    if tx_hash:
+        print(f"Transaction hash: {tx_hash}")
+    
+    time.sleep(3)
+    tx_count = getTransactionCount(base_url, account.address, token)
+    # Get session key balance after transaction
+    session_balance_after = getBalance(base_url, session_key, token)
     
     logging.info('🎊 Completed')
