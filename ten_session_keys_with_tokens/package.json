@@ -1,0 +1,16 @@
+{
+  "name": "ten-network-config-check",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "create:session": "node create-session-key.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.2"
+  }
+}
+
