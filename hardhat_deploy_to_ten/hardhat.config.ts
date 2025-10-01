@@ -42,7 +42,7 @@ const config: HardhatUserConfig = {
       chainType: "generic",
       url: `${process.env.TEN_RPC_URL}/v1/?token=${process.env.TEN_AUTH_TOKEN}`,
       accounts: process.env.TEN_PRIVATE_KEY ? [`0x${process.env.TEN_PRIVATE_KEY}`] : [],
-      chainId: 8443,  // Hardcoded to 8443
+      chainId: parseInt(process.env.TEN_CHAIN_ID || "443"),
     },
   },
 };
