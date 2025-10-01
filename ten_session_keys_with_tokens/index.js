@@ -148,6 +148,66 @@ async function main() {
   } else {
     console.log('\nTEN_TOKEN_ADDRESS and TEN_TOKEN_AMOUNT[_WEI] not set; skipping token transfer');
   }
+
+  // Refund 0.01 ETH from session key back to original account (gateway-signed)
+  const refundTo = process.env.TEN_ACCOUNT;
+  if (refundTo) {
+    console.log("\nRefunding 0.005 ETH from session key to original account...");
+    const valueHex = '0x' + ethers.parseEther('0.005').toString(16);
+
+    // Query gasPrice
+    const gasPriceRes = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'eth_gasPrice', params: [] })
+    });
+    const gasPriceJson = await gasPriceRes.json();
+    const gasPrice = gasPriceJson.result || '0x0';
+
+    // Estimate gas
+    const estimateRes = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'eth_estimateGas', params: [{ from: skAddress, to: refundTo, value: valueHex }] })
+    });
+    const estimateJson = await estimateRes.json();
+    const gas = estimateJson.result || '0x5208'; // fallback 21000
+
+    // Get pending nonce
+    const nonceRes = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 13, method: 'eth_getTransactionCount', params: [skAddress, 'pending'] })
+    });
+    const nonceJson = await nonceRes.json();
+    const nonce = nonceJson.result || '0x0';
+
+    const refundPayload = {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'eth_sendTransaction',
+      params: [{ from: skAddress, to: refundTo, value: valueHex, gas, gasPrice, nonce }]
+    };
+    const refundRes = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(refundPayload)
+    });
+    if (!refundRes.ok) {
+      console.error('Refund request failed', refundRes.status, refundRes.statusText);
+      const text = await refundRes.text().catch(() => '');
+      if (text) console.error(text);
+      process.exit(1);
+    }
+    const refundJson = await refundRes.json();
+    if (refundJson.error) {
+      console.error('RPC error (refund):', refundJson.error);
+      process.exit(1);
+    }
+    console.log('refund_tx_hash:', refundJson.result);
+  } else {
+    console.warn('TEN_ACCOUNT not set; skipping refund from session key');
+  }
 }
 
 main().catch((err) => {
