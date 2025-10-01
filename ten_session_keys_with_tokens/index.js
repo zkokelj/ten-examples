@@ -117,6 +117,37 @@ async function main() {
   })();
   console.log('session_key_balance_wei_after:', wei2.toString());
   console.log('session_key_balance_eth_after:', ether2);
+
+  // Optional: Transfer ERC20 tokens to the session key if configured
+  const tokenAddress = process.env.TEN_TOKEN_ADDRESS;
+  const tokenAmountWeiEnv = process.env.TEN_TOKEN_AMOUNT_WEI;
+  const tokenAmountUnitsEnv = process.env.TEN_TOKEN_AMOUNT; // human units, e.g., "100"
+  if (tokenAddress && (tokenAmountWeiEnv || tokenAmountUnitsEnv)) {
+    console.log("\nTransferring ERC20 tokens to session key...");
+    const erc20Abi = [
+      'function transfer(address to, uint256 amount) returns (bool)',
+      'function balanceOf(address owner) view returns (uint256)',
+      'function decimals() view returns (uint8)'
+    ];
+    const token = new ethers.Contract(tokenAddress, erc20Abi, wallet);
+    let amountWei;
+    if (tokenAmountWeiEnv) {
+      amountWei = BigInt(tokenAmountWeiEnv);
+    } else {
+      const decimals = await token.decimals();
+      const units = BigInt(tokenAmountUnitsEnv || '0');
+      amountWei = units * (10n ** BigInt(decimals));
+    }
+    const tx2 = await token.transfer(skAddress, amountWei);
+    await tx2.wait();
+    console.log('Token transfer tx hash:', tx2.hash);
+
+    // Fetch SK token balance
+    const skTokenBal = await token.balanceOf(skAddress);
+    console.log('session_key_token_balance_wei:', skTokenBal.toString());
+  } else {
+    console.log('\nTEN_TOKEN_ADDRESS and TEN_TOKEN_AMOUNT[_WEI] not set; skipping token transfer');
+  }
 }
 
 main().catch((err) => {
