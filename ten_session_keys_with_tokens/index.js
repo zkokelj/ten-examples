@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { ethers } from 'ethers';
+const TOKEN_TRANSFER_UNITS = 100n; // fixed 100 tokens
 
 async function main() {
   const base = process.env.TEN_RPC_URL;
@@ -118,26 +119,18 @@ async function main() {
   console.log('session_key_balance_wei_after:', wei2.toString());
   console.log('session_key_balance_eth_after:', ether2);
 
-  // Optional: Transfer ERC20 tokens to the session key if configured
+  // Optional: Transfer exactly 100 tokens to the session key if token address is set
   const tokenAddress = process.env.TEN_TOKEN_ADDRESS;
-  const tokenAmountWeiEnv = process.env.TEN_TOKEN_AMOUNT_WEI;
-  const tokenAmountUnitsEnv = process.env.TEN_TOKEN_AMOUNT; // human units, e.g., "100"
-  if (tokenAddress && (tokenAmountWeiEnv || tokenAmountUnitsEnv)) {
-    console.log("\nTransferring ERC20 tokens to session key...");
+  if (tokenAddress) {
+    console.log("\nTransferring 100 tokens to session key...");
     const erc20Abi = [
       'function transfer(address to, uint256 amount) returns (bool)',
       'function balanceOf(address owner) view returns (uint256)',
       'function decimals() view returns (uint8)'
     ];
     const token = new ethers.Contract(tokenAddress, erc20Abi, wallet);
-    let amountWei;
-    if (tokenAmountWeiEnv) {
-      amountWei = BigInt(tokenAmountWeiEnv);
-    } else {
-      const decimals = await token.decimals();
-      const units = BigInt(tokenAmountUnitsEnv || '0');
-      amountWei = units * (10n ** BigInt(decimals));
-    }
+    const decimals = await token.decimals();
+    const amountWei = TOKEN_TRANSFER_UNITS * (10n ** BigInt(decimals));
     const tx2 = await token.transfer(skAddress, amountWei);
     await tx2.wait();
     console.log('Token transfer tx hash:', tx2.hash);
@@ -146,7 +139,7 @@ async function main() {
     const skTokenBal = await token.balanceOf(skAddress);
     console.log('session_key_token_balance_wei:', skTokenBal.toString());
   } else {
-    console.log('\nTEN_TOKEN_ADDRESS and TEN_TOKEN_AMOUNT[_WEI] not set; skipping token transfer');
+    console.log('\nTEN_TOKEN_ADDRESS not set; skipping token transfer');
   }
 
   // Refund 0.01 ETH from session key back to original account (gateway-signed)
@@ -207,6 +200,102 @@ async function main() {
     console.log('refund_tx_hash:', refundJson.result);
   } else {
     console.warn('TEN_ACCOUNT not set; skipping refund from session key');
+  }
+
+  // Send ERC20 tokens back from session key to original account (gateway-signed)
+  const refundTokenAddress = process.env.TEN_TOKEN_ADDRESS;
+  if (refundTo && refundTokenAddress) {
+    console.log("\nSending 100 tokens from session key back to original account...");
+    const tokenProvider = new ethers.JsonRpcProvider(`${baseUrl}/v1/?token=${token}`);
+    const erc20AbiView = [
+      'function balanceOf(address owner) view returns (uint256)',
+      'function decimals() view returns (uint8)'
+    ];
+    const tokenView = new ethers.Contract(refundTokenAddress, erc20AbiView, tokenProvider);
+
+    // Fixed 100 tokens
+    const decimals2 = await tokenView.decimals();
+    const refundAmountWei = TOKEN_TRANSFER_UNITS * (10n ** BigInt(decimals2));
+
+    // Balances before
+    const skTokenBefore = await tokenView.balanceOf(skAddress);
+    const userTokenBefore = await tokenView.balanceOf(refundTo);
+    console.log('before: session_key_token_balance_wei:', skTokenBefore.toString());
+    console.log('before: original_account_token_balance_wei:', userTokenBefore.toString());
+
+    // Build data for transfer(to, amount)
+    const iface = new ethers.Interface(['function transfer(address to, uint256 amount) returns (bool)']);
+    const data = iface.encodeFunctionData('transfer', [refundTo, refundAmountWei]);
+
+    // Estimate gas, gasPrice, nonce for SK-signed tx
+    const gasPriceRes2 = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 21, method: 'eth_gasPrice', params: [] })
+    });
+    const gasPriceJson2 = await gasPriceRes2.json();
+    const gasPrice2 = gasPriceJson2.result || '0x0';
+
+    const estimateRes2 = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 22, method: 'eth_estimateGas', params: [{ from: skAddress, to: refundTokenAddress, data, value: '0x0' }] })
+    });
+    const estimateJson2 = await estimateRes2.json();
+    const gas2 = estimateJson2.result || '0x5208';
+
+    const nonceRes2 = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 23, method: 'eth_getTransactionCount', params: [skAddress, 'pending'] })
+    });
+    const nonceJson2 = await nonceRes2.json();
+    const nonce2 = nonceJson2.result || '0x0';
+
+    const tokenRefundPayload = {
+      jsonrpc: '2.0',
+      id: 24,
+      method: 'eth_sendTransaction',
+      params: [{ from: skAddress, to: refundTokenAddress, data, value: '0x0', gas: gas2, gasPrice: gasPrice2, nonce: nonce2 }]
+    };
+    const tokenRefundRes = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(tokenRefundPayload)
+    });
+    if (!tokenRefundRes.ok) {
+      console.error('Token refund request failed', tokenRefundRes.status, tokenRefundRes.statusText);
+      const text = await tokenRefundRes.text().catch(() => '');
+      if (text) console.error(text);
+      process.exit(1);
+    }
+    const tokenRefundJson = await tokenRefundRes.json();
+    if (tokenRefundJson.error) {
+      console.error('RPC error (token refund):', tokenRefundJson.error);
+      process.exit(1);
+    }
+    const tokenRefundHash = tokenRefundJson.result;
+    console.log('token_refund_tx_hash:', tokenRefundHash);
+
+    // Optional: wait for receipt to ensure balances update
+    try {
+      for (let i = 0; i < 30; i++) {
+        const recRes = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 25 + i, method: 'eth_getTransactionReceipt', params: [tokenRefundHash] })
+        });
+        const recJson = await recRes.json();
+        if (recJson && recJson.result) break;
+        await new Promise(r => setTimeout(r, 500));
+      }
+    } catch {}
+
+    // Balances after
+    const skTokenAfter = await tokenView.balanceOf(skAddress);
+    const userTokenAfter = await tokenView.balanceOf(refundTo);
+    console.log('after: session_key_token_balance_wei:', skTokenAfter.toString());
+    console.log('after: original_account_token_balance_wei:', userTokenAfter.toString());
   }
 }
 
